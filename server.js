@@ -2,6 +2,8 @@ const express = require("express");
 const config = require("./config");
 const { createCanvas, loadImage } = require("canvas");
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 const app = express();
 const PORT = 80;
 
@@ -11,6 +13,9 @@ app.use(express.json());
 const API_KEY_LIST = config.apiKeyList;
 let currentIndex = 0;
 
+// Cache to store input and corresponding image paths
+const imageCache = {};
+
 app.get("/", async (req, res) => {
   res.send("Hello World!");
 });
@@ -18,8 +23,20 @@ app.get("/", async (req, res) => {
 // Get a meme
 app.post("/meme", async (req, res) => {
   try {
-    // Random API key
+    // Normalize input: remove spaces and convert to lowercase
     const { input } = req.body;
+    const normalizedInput = input.replace(/\s+/g, "").toLowerCase();
+
+    // Check if the image for this input already exists
+    if (imageCache[normalizedInput]) {
+      // Send cached image
+      const cachedImagePath = imageCache[normalizedInput];
+      const cachedImageBuffer = fs.readFileSync(cachedImagePath);
+      res.set("Content-Type", "image/png");
+      return res.send(cachedImageBuffer);
+    }
+
+    // Random API key
     const key = API_KEY_LIST[currentIndex];
     currentIndex = (currentIndex + 1) % API_KEY_LIST.length;
 
@@ -49,8 +66,6 @@ app.post("/meme", async (req, res) => {
     // START EDIT IMAGE
     const imageUrl = image.image_name;
     const text = image.captions[0].text;
-    const x = image.captions[0].x;
-    const y = image.captions[0].y;
     const initialFontSize = image.captions[0].fontSize * 0.8;
     const width = image.width;
     const height = image.height;
@@ -101,10 +116,8 @@ app.post("/meme", async (req, res) => {
     // Wrap the text to fit within image width
     const lines = wrapText(ctx, text, width * 0.9);
     const lineHeight = fontSize * 1.2;
-
-    // Adjust starting y position to center the text block vertically
     const textX = width / 2;
-    const startY = y + lineHeight - ((lines.length - 1) * lineHeight) / 2;
+    const startY = height / 2 - ((lines.length - 1) * lineHeight) / 2;
 
     // Draw each line of text with outline
     lines.forEach((line, index) => {
@@ -113,15 +126,23 @@ app.post("/meme", async (req, res) => {
       ctx.fillText(line, textX, textY);
     });
 
-    // Convert canvas to base64
+    // Convert canvas to buffer
     const buffer = canvas.toBuffer("image/png");
-    const base64Image = buffer.toString("base64");
 
-    // Send the base64 image as a response
-    res.json({
-      data: base64Image,
-      status: 200,
-    });
+    // Save the image with a timestamp (optional)
+    const timestamp = Date.now();
+    const filename = path.join(__dirname, `${timestamp}.png`);
+    fs.writeFileSync(filename, buffer);
+
+    // Update cache with the normalized input and corresponding image path
+    imageCache[normalizedInput] = filename;
+
+    // Set response headers for image
+    res.set("Content-Type", "image/png");
+    res.set("Content-Disposition", `inline; filename=${timestamp}.png`);
+
+    // Send the image buffer as a response
+    res.send(buffer);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error fetching meme data" });
